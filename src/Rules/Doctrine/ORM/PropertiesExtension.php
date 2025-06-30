@@ -2,29 +2,38 @@
 
 namespace PHPStan\Rules\Doctrine\ORM;
 
+use Doctrine\Common\Annotations\AnnotationException;
+use Doctrine\Common\Annotations\AnnotationReader;
 use Doctrine\ORM\Mapping\ClassMetadata;
+use Doctrine\ORM\Mapping\Embeddable;
+use PHPStan\Reflection\ClassReflection;
 use PHPStan\Reflection\PropertyReflection;
 use PHPStan\Rules\Properties\ReadWritePropertiesExtension;
 use PHPStan\Type\Doctrine\ObjectMetadataResolver;
 use Throwable;
+use function class_exists;
+use function get_class;
 use function in_array;
 
 class PropertiesExtension implements ReadWritePropertiesExtension
 {
-
 	private ObjectMetadataResolver $objectMetadataResolver;
+
+	private AnnotationReader|null $annotationReader;
 
 	public function __construct(ObjectMetadataResolver $objectMetadataResolver)
 	{
 		$this->objectMetadataResolver = $objectMetadataResolver;
+		$this->annotationReader = class_exists(AnnotationReader::class) ? new AnnotationReader() : null;
 	}
 
 	public function isAlwaysRead(PropertyReflection $property, string $propertyName): bool
 	{
-		$className = $property->getDeclaringClass()->getName();
+		$declaringClass = $property->getDeclaringClass();
+		$className = $declaringClass->getName();
 		$metadata = $this->objectMetadataResolver->getClassMetadata($className);
 		if ($metadata === null) {
-			return false;
+            return $this->isEmbeddableClass($declaringClass);
 		}
 
 		return $metadata->hasField($propertyName) || $metadata->hasAssociation($propertyName);
@@ -36,7 +45,7 @@ class PropertiesExtension implements ReadWritePropertiesExtension
 		$className = $declaringClass->getName();
 		$metadata = $this->objectMetadataResolver->getClassMetadata($className);
 		if ($metadata === null) {
-			return false;
+            return $this->isEmbeddableClass($declaringClass);
 		}
 
 		if (!$metadata->hasField($propertyName) && !$metadata->hasAssociation($propertyName)) {
@@ -100,6 +109,36 @@ class PropertiesExtension implements ReadWritePropertiesExtension
 
 			return false;
 		}
+	}
+
+	private function isEmbeddableClass(ClassReflection $classReflection): bool
+	{
+		$nativeReflection = $classReflection->getNativeReflection();
+
+		$attributes = $nativeReflection->getAttributes();
+		foreach ($attributes as $attribute) {
+			if ($attribute->getName() === Embeddable::class) {
+				return true;
+			}
+		}
+
+		if ($this->annotationReader === null) {
+			return false;
+		}
+
+		try {
+			$annotations = $this->annotationReader->getClassAnnotations($nativeReflection);
+		} catch (AnnotationException $e) {
+			return false;
+		}
+
+		foreach ($annotations as $annotation) {
+			if (get_class($annotation) === Embeddable::class) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 }
